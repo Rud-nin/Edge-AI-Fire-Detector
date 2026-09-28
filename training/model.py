@@ -53,9 +53,12 @@ class Model(nn.Module):
             ),
         )
 
-        self.classifier: nn.Linear = nn.Linear(
-            in_features=32,
-            out_features=num_classes,
+        self.classifier: nn.Sequential = nn.Sequential(
+            nn.Dropout(p=0.5),
+            nn.Linear(
+                in_features=32,
+                out_features=num_classes,
+            ),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
