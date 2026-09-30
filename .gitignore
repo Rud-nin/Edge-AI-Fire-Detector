@@ -4,3 +4,7 @@ __pycache__/
 train.log
 logs/
 models/
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
