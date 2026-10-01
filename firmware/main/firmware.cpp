@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <array>
 
 #include "esp_log.h"
@@ -10,6 +9,8 @@
 #include "led_strip_rmt.h"
 #include "dl_model_base.hpp"
 #include "dl_image_preprocessor.hpp"
+
+#include "http_image_server.hpp"
 
 // Camera pin map for ESP32-S3-WROOM-1 N16R8 CAM boards
 // (CAMERA_MODEL_ESP32S3_EYE / Keyestudio MB0184 / OceanLabz N16R8).
@@ -68,10 +69,19 @@ static void set_led(bool on)
     led_strip_refresh(led_strip);
 }
 
+static void signal_ready()
+{
+    // Flash the onboard LED for ~3 s to indicate initialisation finished.
+    for (int i = 0; i < 6; ++i) {
+        set_led(true);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        set_led(false);
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
 static esp_err_t init_camera()
 {
-    // CAM_PIN_PWDN is -1 on this board (power down not used), so it is passed
-    // straight through to esp_camera_init instead of being driven manually.
     camera_config_t config = {
         .pin_pwdn  = CAM_PIN_PWDN,
         .pin_reset = CAM_PIN_RESET,
@@ -99,9 +109,11 @@ static esp_err_t init_camera()
         .frame_size = FRAMESIZE_QVGA,
 
         .jpeg_quality = 5,
-        .fb_count = 1,
+        // Two buffers so the HTTP handler and the detector can each hold a
+        // frame; GRAB_LATEST keeps the preview fresh while the model runs.
+        .fb_count = 2,
         .fb_location = CAMERA_FB_IN_PSRAM,
-        .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+        .grab_mode = CAMERA_GRAB_LATEST,
 
         .sccb_i2c_port = 0,
         .jpeg_buffer_size = 0
@@ -121,6 +133,12 @@ static esp_err_t init_model()
     if (!model) {
         ESP_LOGE(TAG, "Model Init Failed");
         return ESP_FAIL;
+    }
+
+    if (model->test() == ESP_OK) {
+        ESP_LOGI(TAG, "Model test passed!");
+    } else {
+        ESP_LOGE(TAG, "Model test failed");
     }
 
     // Training preprocessing is Resize((224,224)) -> ToTensor() -> x255, i.e. raw
@@ -203,6 +221,15 @@ extern "C" void app_main(void)
     if (init_model() != ESP_OK) {
         return;
     }
+
+#ifdef ENABLE_HTTP_IMAGE_SERVER
+    if (http_image_server_start() != ESP_OK) {
+        ESP_LOGE(TAG, "HTTP image server start failed");
+    }
+#endif
+
+    // Everything is up: flash the LED so the board tells you it is ready.
+    signal_ready();
 
     while (true) {
         process();
