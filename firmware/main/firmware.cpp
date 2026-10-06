@@ -1,17 +1,43 @@
-#include <array>
+// ---------------------------------------------------------------------------
+// Build switches. The two features are independent: enable either, both, or
+// neither. Comment a switch out to drop that feature from the build.
+// ---------------------------------------------------------------------------
+
+// WiFi HTTP image server (exposes GET /image for tools/monitor.py).
+#define ENABLE_HTTP_SERVER
+
+// Fire-detection model: run inference every loop and light the onboard LED
+// while class 1 wins.
+#define ENABLE_MODEL_PREDICTION
+
+// Both features consume camera frames.
+#if defined(ENABLE_HTTP_SERVER) || defined(ENABLE_MODEL_PREDICTION)
+#define ENABLE_CAMERA
+#endif
 
 #include "esp_log.h"
-#include "esp_camera.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#ifdef ENABLE_CAMERA
+#include "esp_camera.h"
+#endif
+
+#ifdef ENABLE_MODEL_PREDICTION
+#include <array>
 #include "led_strip.h"
 #include "led_strip_rmt.h"
 #include "dl_model_base.hpp"
 #include "dl_image_preprocessor.hpp"
+#endif
 
+#ifdef ENABLE_HTTP_SERVER
 #include "http_image_server.hpp"
+#endif
 
+static const char *TAG = "APP";
+
+#ifdef ENABLE_CAMERA
 // Camera pin map for ESP32-S3-WROOM-1 N16R8 CAM boards
 // (CAMERA_MODEL_ESP32S3_EYE / Keyestudio MB0184 / OceanLabz N16R8).
 #define CAM_PIN_PWDN    -1 //power down is not used
@@ -31,12 +57,12 @@
 #define CAM_PIN_VSYNC    6
 #define CAM_PIN_HREF     7
 #define CAM_PIN_PCLK    13
+#endif // ENABLE_CAMERA
 
+#ifdef ENABLE_MODEL_PREDICTION
 // Onboard addressable RGB LED (WS2812) data line.
 #define LED_STRIP_GPIO       48
 #define LED_STRIP_LED_COUNT  1
-
-static const char *TAG = "MODEL";
 
 static dl::Model *model = nullptr;
 static dl::image::ImagePreprocessor *preprocessor = nullptr;
@@ -79,7 +105,9 @@ static void signal_ready()
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
+#endif // ENABLE_MODEL_PREDICTION
 
+#ifdef ENABLE_CAMERA
 static esp_err_t init_camera()
 {
     camera_config_t config = {
@@ -126,7 +154,9 @@ static esp_err_t init_camera()
 
     return ESP_OK;
 }
+#endif // ENABLE_CAMERA
 
+#ifdef ENABLE_MODEL_PREDICTION
 static esp_err_t init_model()
 {
     model = new dl::Model("model", fbs::MODEL_LOCATION_IN_FLASH_PARTITION);
@@ -197,6 +227,7 @@ static void process()
     // that exponent, so comparing the raw int8 values is equivalent to comparing
     // the dequantized float logits (and avoids a lossy requantize).
     int8_t *res = static_cast<int8_t *>(model_output->data);
+    ESP_LOGD(TAG, "logits: class0=%d class1=%d", res[0], res[1]);
 
     if (res[1] >= res[0]) {
         ESP_LOGI(TAG, "Fire detected");
@@ -207,32 +238,48 @@ static void process()
 
     esp_camera_fb_return(fb);
 }
+#endif // ENABLE_MODEL_PREDICTION
 
 extern "C" void app_main(void)
 {
+#if !defined(ENABLE_HTTP_SERVER) && !defined(ENABLE_MODEL_PREDICTION)
+    ESP_LOGW(TAG, "No features enabled (define ENABLE_HTTP_SERVER and/or ENABLE_MODEL_PREDICTION)");
+#endif
+
+#ifdef ENABLE_MODEL_PREDICTION
     if (init_led() != ESP_OK) {
         ESP_LOGE(TAG, "LED Strip Init Failed");
     }
     set_led(false);
+#endif
 
+#ifdef ENABLE_CAMERA
     if (init_camera() != ESP_OK) {
         return;
     }
+#endif
+
+#ifdef ENABLE_MODEL_PREDICTION
     if (init_model() != ESP_OK) {
         return;
     }
+#endif
 
-#ifdef ENABLE_HTTP_IMAGE_SERVER
+#ifdef ENABLE_HTTP_SERVER
     if (http_image_server_start() != ESP_OK) {
         ESP_LOGE(TAG, "HTTP image server start failed");
     }
 #endif
 
+#ifdef ENABLE_MODEL_PREDICTION
     // Everything is up: flash the LED so the board tells you it is ready.
     signal_ready();
+#endif
 
     while (true) {
+#ifdef ENABLE_MODEL_PREDICTION
         process();
+#endif
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }

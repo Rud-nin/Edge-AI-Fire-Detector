@@ -1,7 +1,5 @@
 #include "http_image_server.hpp"
 
-#ifdef ENABLE_HTTP_IMAGE_SERVER
-
 #include <cstdio>
 #include <cstring>
 
@@ -145,5 +143,3 @@ esp_err_t http_image_server_start()
     }
     return start_httpd() ? ESP_OK : ESP_FAIL;
 }
-
-#endif // ENABLE_HTTP_IMAGE_SERVER
