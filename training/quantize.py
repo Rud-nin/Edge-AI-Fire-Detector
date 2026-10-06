@@ -48,21 +48,13 @@ from esp_ppq.executor.torch import TorchExecutor
 
 from model import Model4
 from const import DATA_DIR, IMAGE_SIZE, MODELS_DIR, configure_logging, log
-from utils import load_training_data, load_calibrating_data, evaluate
+from utils import existing_file, load_training_data, load_calibrating_data, evaluate
 
 CALIBRATION_STEPS: int = 32
 TARGET: str = "esp32s3"
 QUANT_TYPE: str = "w8a8"
 BATCH_SIZE: int = 32
 NUM_WORKERS: int = 4
-
-
-def existing_file(value: str) -> Path:
-    """argparse type: a path that must already be an existing file."""
-    path: Path = Path(value)
-    if not path.is_file():
-        raise argparse.ArgumentTypeError(f"{path} does not exist or is not a file")
-    return path
 
 
 def str_to_bool(value: str) -> bool:

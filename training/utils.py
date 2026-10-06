@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 from typing import Tuple, Union
 import torch
@@ -13,6 +14,14 @@ from const import (
     eval_transform,
     calib_transform,
 )
+
+
+def existing_file(value: str) -> Path:
+    """argparse type: a path that must already be an existing file."""
+    path: Path = Path(value)
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"{path} does not exist or is not a file")
+    return path
 
 
 def load_training_data(
