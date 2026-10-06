@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 // WiFi HTTP image server (exposes GET /image for tools/monitor.py).
-#define ENABLE_HTTP_SERVER
+// #define ENABLE_HTTP_SERVER
 
 // Fire-detection model: run inference every loop and light the onboard LED
 // while class 1 wins.
@@ -13,6 +13,14 @@
 // Both features consume camera frames.
 #if defined(ENABLE_HTTP_SERVER) || defined(ENABLE_MODEL_PREDICTION)
 #define ENABLE_CAMERA
+#endif
+
+// The model needs raw frames, but a pure-HTTP build can stream JPEG instead
+// (far smaller on the wire; the client decodes it from X-Image-Format).
+#if defined(ENABLE_HTTP_SERVER) && !defined(ENABLE_MODEL_PREDICTION)
+#define CAMERA_PIXEL_FORMAT PIXFORMAT_JPEG
+#else
+#define CAMERA_PIXEL_FORMAT PIXFORMAT_RGB565
 #endif
 
 #include "esp_log.h"
@@ -133,23 +141,33 @@ static esp_err_t init_camera()
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
 
-        .pixel_format = PIXFORMAT_RGB565,
+        .pixel_format = CAMERA_PIXEL_FORMAT,
         .frame_size = FRAMESIZE_QVGA,
 
-        .jpeg_quality = 5,
+        // JPEG quality only affects the HTTP preview (the model uses RGB565);
+        // 12 keeps frames small. The buffer must hold a whole JPEG, otherwise
+        // the camera logs FB-OVF / "NO-EOI" for every frame.
+        .jpeg_quality = 12,
         // Two buffers so the HTTP handler and the detector can each hold a
-        // frame; GRAB_LATEST keeps the preview fresh while the model runs.
+        // frame; WHEN_EMPTY grabs on demand instead of streaming continuously.
         .fb_count = 2,
         .fb_location = CAMERA_FB_IN_PSRAM,
-        .grab_mode = CAMERA_GRAB_LATEST,
+        .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
 
         .sccb_i2c_port = 0,
-        .jpeg_buffer_size = 0
+        .jpeg_buffer_size = 32 * 1024
     };
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera Init Failed");
         return err;
+    }
+
+    // The board is mounted upside down: flip the image vertically for every
+    // frame (top <-> bottom, like a reflection on a lake).
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (sensor != nullptr) {
+        sensor->set_vflip(sensor, 1);
     }
 
     return ESP_OK;
@@ -206,7 +224,7 @@ static void process()
         .data = fb->buf,
         .width = static_cast<uint16_t>(fb->width),
         .height = static_cast<uint16_t>(fb->height),
-        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565LE,
+        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565BE,
     };
 
     // The preprocessor converts RGB565 -> RGB888, resizes the whole frame to the
@@ -280,6 +298,6 @@ extern "C" void app_main(void)
 #ifdef ENABLE_MODEL_PREDICTION
         process();
 #endif
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

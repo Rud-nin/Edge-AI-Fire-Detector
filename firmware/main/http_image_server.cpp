@@ -28,13 +28,17 @@ static esp_err_t image_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    // RGB565 when the model is compiled in, JPEG for a pure-HTTP build; the
+    // client reads X-Image-Format to pick the right decoder.
+    const bool jpeg = (fb->format == PIXFORMAT_JPEG);
+
     // NOTE: httpd_resp_set_hdr() stores the pointers, it does NOT copy the
     // strings. Each header therefore needs its own buffer that stays valid
     // until the response is sent (these stack buffers do; we return after send).
     char width_value[16];
     char height_value[16];
 
-    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_type(req, jpeg ? "image/jpeg" : "application/octet-stream");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
     std::snprintf(width_value, sizeof(width_value), "%u", static_cast<unsigned>(fb->width));
@@ -43,7 +47,7 @@ static esp_err_t image_get_handler(httpd_req_t *req)
     std::snprintf(height_value, sizeof(height_value), "%u", static_cast<unsigned>(fb->height));
     httpd_resp_set_hdr(req, "X-Image-Height", height_value);
 
-    httpd_resp_set_hdr(req, "X-Image-Format", "rgb565");
+    httpd_resp_set_hdr(req, "X-Image-Format", jpeg ? "jpeg" : "rgb565");
 
     esp_err_t res = httpd_resp_send(req, reinterpret_cast<const char *>(fb->buf),
                                     static_cast<ssize_t>(fb->len));
