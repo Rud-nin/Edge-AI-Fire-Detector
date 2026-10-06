@@ -1,44 +1,38 @@
-from typing import Tuple
+from pathlib import Path
+from typing import Tuple, Union
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+from torchvision import datasets
 from esp_ppq.executor.torch import TorchExecutor
-from const import TEST_DIR, TRAIN_DIR, VALIDATE_DIR
+from const import (
+    TEST_DIRNAME,
+    TRAIN_DIRNAME,
+    VALIDATE_DIRNAME,
+    train_transform,
+    eval_transform,
+    calib_transform,
+)
 
 
 def load_training_data(
+    data_dir: Path,
     batch_size: int,
-    image_size: int,
     num_workers: int,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
 
-    train_transform: transforms.Compose = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.RandomHorizontalFlip(p=0.3),
-        transforms.RandomRotation(degrees=10),
-        transforms.ToTensor(),
-        transforms.Lambda(lambda x: x * 255.0),
-    ])
-
-    eval_transform: transforms.Compose = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Lambda(lambda x: x * 255.0),
-    ])
-
     train_dataset: datasets.ImageFolder = datasets.ImageFolder(
-        root=TRAIN_DIR,
+        root=data_dir / TRAIN_DIRNAME,
         transform=train_transform,
     )
 
     val_dataset: datasets.ImageFolder = datasets.ImageFolder(
-        root=VALIDATE_DIR,
+        root=data_dir / VALIDATE_DIRNAME,
         transform=eval_transform,
     )
 
     test_dataset: datasets.ImageFolder = datasets.ImageFolder(
-        root=TEST_DIR,
+        root=data_dir / TEST_DIRNAME,
         transform=eval_transform,
     )
 
@@ -70,29 +64,24 @@ def load_training_data(
 
 
 def load_calibrating_data(
+    data_dir: Path,
     batch_size: int,
-    image_size: int,
     num_workers: int,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
 
-    transform: transforms.Compose = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.PILToTensor(),
-    ])
-
     train_dataset: datasets.ImageFolder = datasets.ImageFolder(
-        root=TRAIN_DIR,
-        transform=transform,
+        root=data_dir / TRAIN_DIRNAME,
+        transform=calib_transform,
     )
 
     val_dataset: datasets.ImageFolder = datasets.ImageFolder(
-        root=VALIDATE_DIR,
-        transform=transform,
+        root=data_dir / VALIDATE_DIRNAME,
+        transform=calib_transform,
     )
 
     test_dataset: datasets.ImageFolder = datasets.ImageFolder(
-        root=TEST_DIR,
-        transform=transform,
+        root=data_dir / TEST_DIRNAME,
+        transform=calib_transform,
     )
 
     train_loader: DataLoader = DataLoader(
@@ -124,7 +113,7 @@ def load_calibrating_data(
 
 @torch.no_grad()
 def evaluate(
-    model: nn.Module | TorchExecutor,
+    model: Union[nn.Module, TorchExecutor],
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
