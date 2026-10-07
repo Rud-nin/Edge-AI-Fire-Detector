@@ -24,6 +24,14 @@ def existing_file(value: str) -> Path:
     return path
 
 
+def existing_dir(value: str) -> Path:
+    """argparse type: a path that must already be an existing directory."""
+    path: Path = Path(value)
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"{path} does not exist or is not a directory")
+    return path
+
+
 def load_training_data(
     data_dir: Path,
     batch_size: int,
