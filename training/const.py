@@ -62,6 +62,17 @@ def configure_logging(log_file: Optional[Path] = None) -> None:
 # Raw RGB in [0, 255] (no mean/std shift).
 NOISE_STD: float = 5.0
 
+# Input-preparation requirements a model can request from the load_* helpers in
+# utils.py. Bitmask: bit 0 applies the ImageNet mean/std shift during
+# preprocessing instead of leaving it to the model (see Model5.DATA_FLAGS).
+FLAG_IMAGENET_NORMALIZATION: int = 1
+
+# ImageNet statistics in [0, 255] units (the usual mean/std x255), matching the
+# [0, 255] pixels the transforms below work on. firmware.cpp's
+# ENABLE_IMAGENET_NORMALIZATION mirrors these values.
+IMAGENET_MEAN: Tuple[float, float, float] = (123.675, 116.28, 103.53)
+IMAGENET_STD: Tuple[float, float, float] = (58.395, 57.12, 57.375)
+
 
 def add_gaussian_noise(image: torch.Tensor) -> torch.Tensor:
     """Add zero-mean Gaussian noise (std NOISE_STD, in 0..255 units).
@@ -93,4 +104,34 @@ calib_transform: transforms.Compose = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.PILToTensor(),
     transforms.Lambda(add_gaussian_noise),
+])
+
+
+def normalize_imagenet(image: torch.Tensor) -> torch.Tensor:
+    """Apply the ImageNet mean/std shift to a [0, 255] image.
+
+    Casts to float first, so it also works on the uint8 tensor produced by
+    PILToTensor in the calibration pipeline.
+    """
+    mean: torch.Tensor = torch.tensor(IMAGENET_MEAN, dtype=torch.float32).view(3, 1, 1)
+    std: torch.Tensor = torch.tensor(IMAGENET_STD, dtype=torch.float32).view(3, 1, 1)
+    return (image.float() - mean) / std
+
+
+# Normalised variants for models that request FLAG_IMAGENET_NORMALIZATION
+# (model.py's Model5). They are built from the transforms above so their stages
+# cannot drift apart; the shift is appended last, i.e. after the [0, 255] noise.
+normalize_train_transform: transforms.Compose = transforms.Compose([
+    *train_transform.transforms,
+    transforms.Lambda(normalize_imagenet),
+])
+
+normalize_eval_transform: transforms.Compose = transforms.Compose([
+    *eval_transform.transforms,
+    transforms.Lambda(normalize_imagenet),
+])
+
+normalize_calib_transform: transforms.Compose = transforms.Compose([
+    *calib_transform.transforms,
+    transforms.Lambda(normalize_imagenet),
 ])

@@ -1,5 +1,6 @@
 # ---------------------------------------------------------------------------
-# Train the fire-detection model (builds model.py's Model4).
+# Train the fire-detection model. --model-type N builds ModelN from model.py
+# (e.g. --model-type 5 -> Model5), so the architecture is picked at launch.
 #
 # Dataset layout (torchvision ImageFolder): the data directory needs one folder
 # per split, each holding one folder per class:
@@ -10,14 +11,19 @@
 #         test/<class>/<images>
 #
 # Images are resized to 224x224 and kept as raw RGB in [0, 255] (the transforms
-# in const.py), matching what the ESP32 firmware feeds the quantized model.
-# Training uses CrossEntropyLoss + Adam; the checkpoint with the best validation
-# accuracy is saved.
+# in const.py), matching what the ESP32 firmware feeds the quantized model. A
+# model can request different input preparation through its DATA_FLAGS attribute
+# (Model5 asks for the ImageNet mean/std shift); the loaders pick the matching
+# transforms automatically. Training uses CrossEntropyLoss + Adam; the checkpoint
+# with the best validation accuracy is saved.
 #
 # Usage:
-#     python train.py [options]
+#     python train.py --model-type N [options]
 #
-# Options (all optional; defaults are the constants at the top of this file):
+# Options (defaults are the constants at the top of this file):
+#     --model-type INT      required: train ModelN from model.py (e.g. 5 ->
+#                           Model5). The accepted values are discovered from the
+#                           Model<N> classes defined there.
 #     --data-dir PATH       dataset root containing train/validate/test.
 #                           Used only if the path exists, otherwise DATA_DIR
 #                           from const.py is used.
@@ -37,10 +43,10 @@
 #                           FIRST_NAMES / LAST_NAMES lists below.
 #
 # Examples:
-#     python train.py                                # defaults, random name
-#     python train.py --epoch 30 --batch-size 64     # longer, smaller batches
-#     python train.py --seed 42 --name firenet_v1    # reproducible + named
-#     python train.py --data-dir /mnt/fire --log-dir /tmp/logs --model-dir /tmp/models
+#     python train.py --model-type 2                 # Model2, random name
+#     python train.py --model-type 5 --epoch 30 --batch-size 64
+#     python train.py --model-type 4 --seed 42 --name firenet_v1
+#     python train.py --model-type 2 --data-dir /mnt/fire --log-dir /tmp/logs --model-dir /tmp/models
 #
 # Outputs:
 #     <model-dir>/<name>.pt             best checkpoint (highest val accuracy)
@@ -51,15 +57,15 @@ import argparse
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Type
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from model import Model4
+from model import MODEL_CLASSES
 from const import DATA_DIR, LOG_DIR, MODELS_DIR, DEVICE, configure_logging, log
-from utils import load_training_data, evaluate
+from utils import count_parameters, load_training_data, evaluate
 
 EPOCHS: int = 15
 BATCH_SIZE: int = 128
@@ -78,6 +84,13 @@ LAST_NAMES = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the fire-detection model.")
+    parser.add_argument(
+        "--model-type",
+        type=int,
+        required=True,
+        choices=sorted(MODEL_CLASSES),
+        help="model to train: N selects ModelN from model.py (e.g. 5 -> Model5)",
+    )
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -215,20 +228,31 @@ def main() -> None:
     log.info("logging to terminal and %s", log_file)
     log.info("model=%s", model_path)
 
+    model_class: Type[nn.Module] = MODEL_CLASSES[args.model_type]
+    # A model may declare input-preparation requirements; the loaders translate
+    # DATA_FLAGS (Model5: the ImageNet mean/std shift) into transforms.
+    data_flags: int = getattr(model_class, "DATA_FLAGS", 0)
+
     train_loader, val_loader, test_loader = load_training_data(
         data_dir=data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_worker,
+        flags=data_flags,
     )
     classes = train_loader.dataset.classes
 
-    model: nn.Module = Model4(num_classes=len(classes)).to(DEVICE)
+    model: nn.Module = model_class(num_classes=len(classes)).to(DEVICE)
     criterion: nn.Module = nn.CrossEntropyLoss()
     optimizer: torch.optim.Optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
+    # CHANGED for MobileNetV2: report the total AND trainable parameter counts
+    # (a frozen backbone makes the two differ).
     log.info(
-        "parameters=%d classes=%s train=%d val=%d test=%d",
-        sum(p.numel() for p in model.parameters()),
+        "architecture=%s data_flags=%d total_parameters=%d trainable_parameters=%d classes=%s train=%d val=%d test=%d",
+        model_class.__name__,
+        data_flags,
+        count_parameters(model),
+        count_parameters(model, trainable_only=True),
         classes,
         len(train_loader.dataset),
         len(val_loader.dataset),

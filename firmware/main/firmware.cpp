@@ -10,6 +10,13 @@
 // while class 1 wins.
 #define ENABLE_MODEL_PREDICTION
 
+// ImageNet input normalisation, for MobileNetV2-style checkpoints (model.py's
+// Model5). Enable it only when the flashed .espdl was exported with
+// Model5(normalize=False), i.e. with no normalisation baked into the graph, so
+// this preprocessor is the single place applying the mean/std shift. Leave it
+// off for the from-scratch models (Model1..Model4), which expect raw [0, 255].
+// #define ENABLE_IMAGENET_NORMALIZATION
+
 // Both features consume camera frames.
 #if defined(ENABLE_HTTP_SERVER) || defined(ENABLE_MODEL_PREDICTION)
 #define ENABLE_CAMERA
@@ -189,15 +196,25 @@ static esp_err_t init_model()
         ESP_LOGE(TAG, "Model test failed");
     }
 
-    // Training preprocessing is Resize((224,224)) -> ToTensor() -> x255, i.e. raw
-    // RGB in [0, 255] with no mean/std shift. Matching that here means the
-    // preprocessor converts the camera frame to RGB888, resizes, and quantizes with
-    // the model input exponent (Q = round(pixel / 2^exponent)); it also writes
-    // directly into the model input tensor in the NHWC layout the graph expects.
+    // The preprocessor converts the camera frame to RGB888, resizes it to the
+    // model input size, applies (pixel - mean) / std, and quantizes with the
+    // model input exponent (Q = round(value / 2^exponent)); it writes directly
+    // into the model input tensor in the NHWC layout the graph expects.
     // If colours come out swapped (and detection quality suffers), pass
     // rgb_swap = true as the 4th argument.
+#ifdef ENABLE_IMAGENET_NORMALIZATION
+    // Model5: the exported graph carries no normalisation, so apply the ImageNet
+    // statistics here. Values are the usual ImageNet mean/std x255 (the
+    // preprocessor works on [0, 255] pixels) and match Model5.PIXEL_MEAN /
+    // Model5.PIXEL_STD in training/model.py.
+    std::array<float, 3> mean = {123.675f, 116.28f, 103.53f};
+    std::array<float, 3> std  = {58.395f, 57.12f, 57.375f};
+#else
+    // Training preprocessing is Resize((224,224)) -> ToTensor() -> x255, i.e.
+    // raw RGB in [0, 255] with no mean/std shift (Model1..Model4).
     std::array<float, 3> mean = {0.0f, 0.0f, 0.0f};
     std::array<float, 3> std  = {1.0f, 1.0f, 1.0f};
+#endif
     preprocessor = new dl::image::ImagePreprocessor(model, mean, std, false);
     if (!preprocessor) {
         ESP_LOGE(TAG, "Image Preprocessor Init Failed");

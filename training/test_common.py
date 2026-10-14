@@ -1,6 +1,6 @@
 import time
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Type
 
 import cv2
 import numpy as np
@@ -10,16 +10,16 @@ import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 
-from model import Model4
+from model import MODEL_CLASSES
 from const import (
     CLASS_NAMES,
     DEVICE,
     DISPLAY_MAX_SIZE,
     INDICATOR_COLOR,
     INDICATOR_SIZE,
-    eval_transform,
     log,
 )
+from utils import instantiate_model, select_transforms
 
 HTTP_TIMEOUT: float = 30.0
 HTTP_RETRIES: int = 3
@@ -140,11 +140,14 @@ def fit_for_display(frame: np.ndarray) -> np.ndarray:
     )
 
 
-def load_model(model_path: Path) -> nn.Module:
-    model: nn.Module = Model4().to(DEVICE)
+def load_model(model_path: Path, model_type: int) -> nn.Module:
+    # The checkpoint only holds weights, so the architecture comes from the
+    # caller (--model-type); pretrained weights would be overwritten anyway.
+    model_class: Type[nn.Module] = MODEL_CLASSES[model_type]
+    model: nn.Module = instantiate_model(model_class, pretrained=False).to(DEVICE)
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     model.eval()
-    log.info("loaded model=%s device=%s", model_path, DEVICE)
+    log.info("loaded model=%s class=%s device=%s", model_path, model_class.__name__, DEVICE)
     return model
 
 
@@ -154,6 +157,10 @@ def run_inference(
     window_name: str,
     end_message: str = "stream ended",
 ) -> None:
+    # The model may ask for a specific input preparation (Model5 requests the
+    # ImageNet mean/std shift); pick the matching eval transform from DATA_FLAGS.
+    _, model_transform, _ = select_transforms(getattr(model, "DATA_FLAGS", 0))
+
     # read frame -> preprocess -> forward -> log + paint INDICATOR_* -> imshow.
     # Press 'q' in the window to stop early.
     try:
@@ -164,7 +171,7 @@ def run_inference(
                     log.info("%s", end_message)
                     break
 
-                inputs: torch.Tensor = preprocess(frame, eval_transform)
+                inputs: torch.Tensor = preprocess(frame, model_transform)
                 outputs: torch.Tensor = model(inputs)[0]
 
                 # scale huge sources down so the window stays a sane size

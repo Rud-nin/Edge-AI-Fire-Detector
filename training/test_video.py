@@ -6,21 +6,23 @@
 # the top-left of the preview. Press 'q' to quit early; playback otherwise
 # stops at the end of the video.
 #
-# Option A preprocessing is used (raw RGB in [0, 255]), the same as training, so
-# the result should match the model. Large videos are downscaled for display to
-# DISPLAY_MAX_SIZE (const.py), so the window never gets huge.
+# Input preparation follows the model's DATA_FLAGS (const.py): raw RGB in
+# [0, 255] for Model1..Model4, the ImageNet mean/std shift for Model5 - the same
+# as training, so the result should match the model. Large videos are downscaled
+# for display to DISPLAY_MAX_SIZE (const.py), so the window never gets huge.
 #
 # Usage:
-#     python test_video.py --input <model.pt> --video <video file> [options]
+#     python test_video.py --model-type N --input <model.pt> --video <video file> [options]
 #
 # Options:
+#     --model-type INT    required: build ModelN from model.py
 #     --input PATH        required: trained checkpoint (.pt); must exist
 #     --video PATH        required: video file to play; must exist
 #     --window-name STR   preview window title (default: model test (video))
 #
 # Examples:
-#     python test_video.py --input ../models/Kairo_Quell.pt --video ~/clips/fire.mp4
-#     python test_video.py --input ../models/Kairo_Quell.pt --video clip.mp4 \
+#     python test_video.py --model-type 2 --input ../models/Kairo_Quell.pt --video ~/clips/fire.mp4
+#     python test_video.py --model-type 2 --input ../models/Kairo_Quell.pt --video clip.mp4 \
 #         --window-name fire
 # ---------------------------------------------------------------------------
 
@@ -31,6 +33,7 @@ import cv2
 import torch.nn as nn
 
 from const import configure_logging, log
+from model import MODEL_CLASSES
 from test_common import CaptureSource, load_model, run_inference
 from utils import existing_file
 
@@ -39,6 +42,13 @@ WINDOW_NAME: str = "model test (video)"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a trained model on a video file.")
+    parser.add_argument(
+        "--model-type",
+        type=int,
+        required=True,
+        choices=sorted(MODEL_CLASSES),
+        help="model to run: N builds ModelN from model.py (e.g. 5 -> Model5)",
+    )
     parser.add_argument(
         "--input",
         type=existing_file,
@@ -65,9 +75,12 @@ def main() -> None:
 
     configure_logging()
 
-    log.info("input=%s video=%s window=%s", args.input, args.video, args.window_name)
+    log.info(
+        "model_type=%d input=%s video=%s window=%s",
+        args.model_type, args.input, args.video, args.window_name,
+    )
 
-    model: nn.Module = load_model(args.input)
+    model: nn.Module = load_model(args.input, args.model_type)
 
     capture: cv2.VideoCapture = cv2.VideoCapture(str(args.video))
     if not capture.isOpened():

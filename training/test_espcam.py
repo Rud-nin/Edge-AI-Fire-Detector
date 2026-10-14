@@ -9,20 +9,22 @@
 #
 # When the model's class 1 wins it logs a line and paints a small red square in
 # the top-left of the preview. Press 'q' in the window to quit. The poll rate is
-# capped by HTTP_TARGET_FPS (test_common.py).
+# capped by HTTP_TARGET_FPS (test_common.py). Input preparation follows the
+# model's DATA_FLAGS (const.py), just like training.
 #
 # Usage:
-#     python test_espcam.py --input <model.pt> --address <ip> [options]
+#     python test_espcam.py --model-type N --input <model.pt> --address <ip> [options]
 #
 # Options:
+#     --model-type INT    required: build ModelN from model.py
 #     --input PATH        required: trained checkpoint (.pt); must exist
 #     --address STR       required: board IPv4 address (e.g. 192.168.1.42)
 #     --port INT          HTTP port of the image server (default: 80)
 #     --window-name STR   preview window title (default: model test (esp-cam))
 #
 # Examples:
-#     python test_espcam.py --input ../models/Kairo_Quell.pt --address 192.168.1.42
-#     python test_espcam.py --input ../models/Kairo_Quell.pt --address 10.0.0.5 --port 8080
+#     python test_espcam.py --model-type 2 --input ../models/Kairo_Quell.pt --address 192.168.1.42
+#     python test_espcam.py --model-type 2 --input ../models/Kairo_Quell.pt --address 10.0.0.5 --port 8080
 # ---------------------------------------------------------------------------
 
 import argparse
@@ -31,6 +33,7 @@ import ipaddress
 import torch.nn as nn
 
 from const import configure_logging, log
+from model import MODEL_CLASSES
 from test_common import HttpImageSource, load_model, run_inference
 from utils import existing_file
 
@@ -48,6 +51,13 @@ def ipv4_address(value: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a trained model on the ESP32 camera stream.")
+    parser.add_argument(
+        "--model-type",
+        type=int,
+        required=True,
+        choices=sorted(MODEL_CLASSES),
+        help="model to run: N builds ModelN from model.py (e.g. 5 -> Model5)",
+    )
     parser.add_argument(
         "--input",
         type=existing_file,
@@ -81,9 +91,12 @@ def main() -> None:
     configure_logging()
 
     url: str = f"http://{args.address}:{args.port}/image"
-    log.info("input=%s url=%s window=%s", args.input, url, args.window_name)
+    log.info(
+        "model_type=%d input=%s url=%s window=%s",
+        args.model_type, args.input, url, args.window_name,
+    )
 
-    model: nn.Module = load_model(args.input)
+    model: nn.Module = load_model(args.input, args.model_type)
 
     source: HttpImageSource = HttpImageSource(url)
     run_inference(model, source, args.window_name)

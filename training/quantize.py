@@ -1,16 +1,19 @@
 # ---------------------------------------------------------------------------
 # Quantize a trained checkpoint into a .espdl model (via ESP-PPQ / ESP-DL).
 #
-# The input must be a Model4 checkpoint (model.py) produced by train.py.
-# Calibration samples come from the training split as raw RGB in [0, 255]
-# (the transforms in const.py), matching what the firmware feeds the model.
-# The exported .espdl is what firmware/CMakeLists.txt flashes into the "model"
-# partition.
+# The input must be a checkpoint produced by train.py for the model selected
+# with --model-type (model.py). Calibration samples come from the training split
+# through the same transforms train.py uses, so a model that requests extra
+# input preparation (Model5's DATA_FLAGS) is calibrated on matching values. The
+# exported .espdl is what firmware/CMakeLists.txt flashes into the "model"
+# partition; the logged input_contract says which firmware preprocessing it
+# expects.
 #
 # Usage:
-#     python quantize.py --input <model.pt> [options]
+#     python quantize.py --model-type N --input <model.pt> [options]
 #
 # Options:
+#     --model-type INT        required: quantize ModelN from model.py
 #     --input PATH            required: trained checkpoint (.pt); must exist
 #     --output STR            output name, saved as models/<name>.espdl
 #                             (default: the input file's name)
@@ -27,9 +30,9 @@
 #                             (default: true)
 #
 # Examples:
-#     python quantize.py --input ../models/Kairo_Quell.pt
-#     python quantize.py --input ../models/Kairo_Quell.pt --output firenet_v1
-#     python quantize.py --input ../models/Kairo_Quell.pt --quant-type w8a16 \
+#     python quantize.py --model-type 2 --input ../models/Kairo_Quell.pt
+#     python quantize.py --model-type 5 --input ../models/Veyra_Sora.pt --output firenet_v1
+#     python quantize.py --model-type 2 --input ../models/Kairo_Quell.pt --quant-type w8a16 \
 #         --target esp32s3 --export-test-values false
 #
 # Outputs (next to the other model files):
@@ -46,9 +49,25 @@ import torch.nn as nn
 from esp_ppq.api import espdl_quantize_torch
 from esp_ppq.executor.torch import TorchExecutor
 
-from model import Model4
-from const import DATA_DIR, IMAGE_SIZE, MODELS_DIR, configure_logging, log
-from utils import existing_file, load_training_data, load_calibrating_data, evaluate
+from typing import Type
+
+import torch
+import torch.nn as nn
+from esp_ppq.api import espdl_quantize_torch
+from esp_ppq.executor.torch import TorchExecutor
+
+from model import MODEL_CLASSES
+from const import (
+    DATA_DIR,
+    FLAG_IMAGENET_NORMALIZATION,
+    IMAGE_SIZE,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    MODELS_DIR,
+    configure_logging,
+    log,
+)
+from utils import existing_file, instantiate_model, load_training_data, load_calibrating_data, evaluate
 
 CALIBRATION_STEPS: int = 32
 TARGET: str = "esp32s3"
@@ -69,6 +88,13 @@ def str_to_bool(value: str) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Quantize a trained model into a .espdl model.")
+    parser.add_argument(
+        "--model-type",
+        type=int,
+        required=True,
+        choices=sorted(MODEL_CLASSES),
+        help="model to quantize: N selects ModelN from model.py (e.g. 5 -> Model5)",
+    )
     parser.add_argument(
         "--input",
         type=existing_file,
@@ -152,17 +178,31 @@ def main() -> None:
     )
     log.info("data_dir=%s export_test_values=%s device=%s", data_dir, args.export_test_values, device)
 
-    model: Model4 = Model4()
+    model_class: Type[nn.Module] = MODEL_CLASSES[args.model_type]
+    data_flags: int = getattr(model_class, "DATA_FLAGS", 0)
+    if data_flags & FLAG_IMAGENET_NORMALIZATION:
+        log.info(
+            "input_contract=imagenet mean=%s std=%s -> firmware must enable ENABLE_IMAGENET_NORMALIZATION",
+            IMAGENET_MEAN,
+            IMAGENET_STD,
+        )
+    else:
+        log.info("input_contract=raw [0,255] -> firmware mean=0/std=1")
+
+    # The checkpoint supplies every weight, so instantiating with pretrained
+    # ImageNet weights would be wasted work (instantiate_model drops the argument
+    # for models that do not accept it).
+    model: nn.Module = instantiate_model(model_class, pretrained=False)
     model.load_state_dict(torch.load(args.input, map_location=device))
     model.to(device)
     model.eval()
 
-    # Option A preprocessing: Resize((224,224)) -> ToTensor() -> x255, i.e. raw RGB
-    # in [0,255]. Calibration and evaluation must carry the same value range;
-    # `load_training_data` (float) and `load_calibrating_data` (uint8) both yield
-    # [0,255], and the model input exponent applies Q = round(pixel / 2^exp).
-    train_loader, _, _ = load_training_data(data_dir, args.batch_size, args.num_worker)
-    _, _, test_loader = load_calibrating_data(data_dir, args.batch_size, args.num_worker)
+    # Calibration and evaluation must feed the same value range the model was
+    # trained on and the firmware will feed: raw RGB [0, 255] by default, or
+    # ImageNet-normalised when the model requests it (DATA_FLAGS). The model
+    # input exponent is calibrated from these samples (Q = round(value / 2^exp)).
+    train_loader, _, _ = load_training_data(data_dir, args.batch_size, args.num_worker, flags=data_flags)
+    _, _, test_loader = load_calibrating_data(data_dir, args.batch_size, args.num_worker, flags=data_flags)
 
     quant_ppq_graph = espdl_quantize_torch(
         model=model,

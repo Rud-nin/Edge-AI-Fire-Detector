@@ -5,21 +5,23 @@
 # frame. When the model's class 1 wins it logs a line and paints a small red
 # square in the top-left of the preview. Press 'q' in the window to quit.
 #
-# Option A preprocessing is used (raw RGB in [0, 255]), the same as training,
-# so the result should match the model. For the quantized/on-device version use
-# test_espcam.py instead.
+# Input preparation follows the model's DATA_FLAGS (const.py): raw RGB in
+# [0, 255] for Model1..Model4, the ImageNet mean/std shift for Model5 - the same
+# as training, so the result should match the model. For the quantized/on-device
+# version use test_espcam.py instead.
 #
 # Usage:
-#     python test_webcam.py --input <model.pt> [options]
+#     python test_webcam.py --model-type N --input <model.pt> [options]
 #
 # Options:
+#     --model-type INT    required: build ModelN from model.py
 #     --input PATH        required: trained checkpoint (.pt); must exist
 #     --camera-index INT  camera to open (default: 0)
 #     --window-name STR   preview window title (default: model test (webcam))
 #
 # Examples:
-#     python test_webcam.py --input ../models/Kairo_Quell.pt
-#     python test_webcam.py --input ../models/Kairo_Quell.pt --camera-index 1
+#     python test_webcam.py --model-type 2 --input ../models/Kairo_Quell.pt
+#     python test_webcam.py --model-type 2 --input ../models/Kairo_Quell.pt --camera-index 1
 # ---------------------------------------------------------------------------
 
 import argparse
@@ -29,6 +31,7 @@ import cv2
 import torch.nn as nn
 
 from const import configure_logging, log
+from model import MODEL_CLASSES
 from test_common import CaptureSource, load_model, run_inference
 from utils import existing_file
 
@@ -38,6 +41,13 @@ WINDOW_NAME: str = "model test (webcam)"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a trained model on the local webcam.")
+    parser.add_argument(
+        "--model-type",
+        type=int,
+        required=True,
+        choices=sorted(MODEL_CLASSES),
+        help="model to run: N builds ModelN from model.py (e.g. 5 -> Model5)",
+    )
     parser.add_argument(
         "--input",
         type=existing_file,
@@ -64,9 +74,12 @@ def main() -> None:
 
     configure_logging()
 
-    log.info("input=%s camera_index=%d window=%s", args.input, args.camera_index, args.window_name)
+    log.info(
+        "model_type=%d input=%s camera_index=%d window=%s",
+        args.model_type, args.input, args.camera_index, args.window_name,
+    )
 
-    model: nn.Module = load_model(args.input)
+    model: nn.Module = load_model(args.input, args.model_type)
 
     capture: cv2.VideoCapture = cv2.VideoCapture(args.camera_index)
     if not capture.isOpened():
